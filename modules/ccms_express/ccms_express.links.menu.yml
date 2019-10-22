@@ -1,0 +1,18 @@
+ccms_express.settings:
+  title: 'CCMS Express Auth'
+  route_name: ccms_express.settings
+  description: 'CCMS Drupal - Express Connection'
+  parent: system.admin_config
+  weight: 99
+ccms_express.login:
+  title: 'Express Login'
+  route_name: ccms_express.login_bridge
+  description: 'Express Login Single Sign in' 
+  parent: entity.user.collection
+  weight: 99
+ccms_express.user:
+  title: 'Add Express User'
+  route_name: ccms_express.createuser
+  description: 'Add Express User' 
+  parent: entity.user.collection
+  weight: 99

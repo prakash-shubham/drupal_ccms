@@ -1,0 +1,446 @@
+<?php
+
+/**
+ * @file
+ * Contains ccms_express.module.
+ */
+
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\node\Entity\Node;
+use Drupal\ccms_express\Controller\GetArticleNode;
+use Drupal\ccms_express\Controller\GetSessionToken;
+use Drupal\Core\Form\FormStateInterface;
+use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Exception\ConnectException;
+use Symfony\Component\HttpFoundation\Request;
+use Drupal\Core\Entity\ContentEntityInterface;
+use Drupal\field\Entity\FieldStorageConfig;
+
+/**
+ * Implements hook_node_insert().
+ */
+function ccms_express_node_insert(EntityInterface $node) {
+  $status = $node->get('status')->getValue()[0]['value'];
+  $type = $node->get('type')->getValue()[0]['target_id'];
+  if ($status == 1) {
+    $sessionToken = new GetSessionToken();
+    $token = $sessionToken->gettoken();
+    $config_factory = \Drupal::configFactory();
+    $ccms_auth_config = $config_factory->getEditable('ccms_express.auth');
+
+    if (in_array($type, ['article', 'blog', 'magazine', 'events', 'slideshow'])) {
+      $article = new GetArticleNode();
+      $data = $article->getarticle($node->id());
+      $express_published = $node->get('field_received_express')->getValue()[0]['value'];
+      try {
+        $client = \Drupal::httpClient();
+        $request = $client->post($ccms_auth_config->get('url') . '/ccms/' . $type, [
+          'headers' => ['x-access-token' => $token],
+          'json' => $data,
+        ]);
+        $response = json_decode($request);
+        if ($request->getStatusCode() == '200' && $express_published != 1) {
+          $tempstore = \Drupal::service('tempstore.private')->get('ccms_express');
+          $tempstore->set('node_' . $node->id(), 'hook_updated');
+          $nodeObj = Node::load($node->id());
+          $nodeObj->set('field_received_express', TRUE);
+          $nodeObj->save();
+        }
+      }
+      catch (RequestException $e) {
+        watchdog_exception('ccms_express', $e);
+        return FALSE;
+      }
+      catch (ConnectException $e) {
+        watchdog_exception('ccms_express', $e);
+        return FALSE;
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_node_update().
+ */
+function ccms_express_node_update(EntityInterface $node) {
+  $status = $node->get('status')->getValue()[0]['value'];
+  $type = $node->get('type')->getValue()[0]['target_id'];
+  $tempstore = \Drupal::service('tempstore.private')->get('ccms_express');
+  $express_published = $node->get('field_received_express')->getValue()[0]['value'];
+  if ($tempstore->get('node_' . $node->id()) == 'hook_updated') {
+    $tempstore->delete('node_' . $node->id());
+  }
+  else {
+    $method = 'put';
+    if ($status == 1 || $express_published == 1) {
+      $sessionToken = new GetSessionToken();
+      $token = $sessionToken->gettoken();
+      $config_factory = \Drupal::configFactory();
+      $ccms_auth_config = $config_factory->getEditable('ccms_express.auth');
+      if (in_array($type, ['article', 'blog', 'magazine', 'events', 'slideshow'])) {
+        $article = new GetArticleNode();
+        $data = $article->getarticle($node->id());
+        if ($express_published != 1) {
+          $method = 'post';
+        }
+        try {
+          $client = \Drupal::httpClient();
+          $request = $client->$method($ccms_auth_config->get('url') . '/ccms/' . $type, [
+            'headers' => ['x-access-token' => $token],
+            'json' => $data,
+          ]);
+          if ($request->getStatusCode() == '200' && $express_published != 1) {
+            $tempstore->set('node_' . $node->id(), 'hook_updated');
+            $nodeObj = Node::load($node->id());
+            $nodeObj->set('field_received_express', TRUE);
+            $nodeObj->save();
+          }
+        }
+        catch (RequestException $e) {
+          watchdog_exception('ccms_express', $e);
+        }
+        catch (ConnectException $e) {
+          watchdog_exception('ccms_express', $e);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Adds a validation function for the Article Delete form.
+ * Sponsored form Alterations.
+ * Disabling Required Image for sponsored articles.
+ * Adding Submit Handler for Taxonomy Overview Edit forms.
+ */
+function ccms_express_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+
+  switch ($form_id) {
+    // ...
+    case 'node_article_delete_form':
+    case 'node_blog_delete_form':
+    case 'node_magazine_delete_form':
+    case 'node_events_delete_form':
+    case 'node_slideshow_delete_form':
+      $form['#validate'][] = '_article_delete_validation';
+      break;
+
+    case 'taxonomy_overview_terms':
+      // code...
+      $form['#submit'][] = 'taxonomy_overview_form_submit';
+      break;
+
+    case 'node_article_sponsored_form':
+      // code...
+      $form['field_image_ccms']['widget']['#required'] = FALSE;
+      break;
+
+    case 'node_delete_multiple_confirm_form':
+      $form['#validate'][] = '_bulk_delete_validation';
+      break;
+
+    case 'node_article_form':
+    case 'node_blog_form':
+      $form['moderation_state']['widget'][0]['state']['#default_value'] = 'published';
+      break;
+  }
+}
+
+/**
+ *
+ */
+function taxonomy_overview_form_submit(array $form, FormStateInterface $form_state) {
+  $vocabulary = $form_state->get(['taxonomy', 'vocabulary']);
+  $term_data = getCategoryTree();
+
+  $sessionToken = new GetSessionToken();
+  $token = $sessionToken->gettoken();
+  $config_factory = \Drupal::configFactory();
+  $ccms_auth_config = $config_factory->getEditable('ccms_express.auth');
+
+  if ($vocabulary->id() == 'category') {
+    try {
+      $client = \Drupal::httpClient();
+      $request = $client->put($ccms_auth_config->get('url') . '/category', [
+        'headers' => ['x-access-token' => $token],
+        'json' => $term_data,
+      ]);
+    }
+    catch (RequestException $e) {
+      watchdog_exception('ccms_express', $e);
+    }
+    catch (ConnectException $e) {
+      watchdog_exception('ccms_express', $e);
+    }
+  }
+}
+
+/**
+ * The function sends a request to the Express App. On recieving a succesfull
+ * response the Article is deleted from the CCMS.
+ */
+function _article_delete_validation(&$form, FormStateInterface $form_state) {
+  $article = $form_state->getFormObject()->getEntity();
+  $id = $article->id();
+  $type = $article->get('type')->getValue()[0]['target_id'];
+  $title = $article->get('title')->getValue()[0]['value'];
+
+  $sessionToken = new GetSessionToken();
+  $token = $sessionToken->gettoken();
+
+  $config_factory = \Drupal::configFactory();
+  $ccms_auth_config = $config_factory->getEditable('ccms_express.auth');
+
+  try {
+    $client = \Drupal::httpClient();
+    $request = $client->delete($ccms_auth_config->get('url') . '/ccms/' . $type . '/' . $id, [
+      'headers' => ['x-access-token' => $token],
+      'json' => ['title' => $title],
+    ]);
+  }
+  catch (RequestException $e) {
+    $form_state->setError($form, $response->message . 'Express APP did not delete this. It cannot be deleted yet.');
+    return FALSE;
+  }
+  $response = json_decode($request->getBody());
+  if ($response->message == "Archived Successfully") {
+    drupal_set_message(t('Article deleted after getting response from Express App'), 'status');
+  }
+  else {
+    $form_state->setError($form, $response->message . 'Express APP did not delete this. It cannot be deleted yet.');
+  }
+}
+
+/**
+ * The function sends a request to the Express App on creation of a New Category.
+ */
+function ccms_express_taxonomy_term_insert(EntityInterface $entity) {
+  if ($entity->getVocabularyId() == 'category') {
+    $term_data = getCategory($entity->id());
+
+    $sessionToken = new GetSessionToken();
+    $token = $sessionToken->gettoken();
+    $config_factory = \Drupal::configFactory();
+    $ccms_auth_config = $config_factory->getEditable('ccms_express.auth');
+
+    try {
+      $client = \Drupal::httpClient();
+      $request = $client->post($ccms_auth_config->get('url') . '/category', [
+        'headers' => ['x-access-token' => $token],
+        'json' => $term_data,
+      ]);
+    }
+    catch (RequestException $e) {
+      watchdog_exception('ccms_express', $e);
+    }
+    catch (ConnectException $e) {
+      watchdog_exception('ccms_express', $e);
+    }
+    $pass = 'ccmsadmin2016';
+    $auth = 'Basic ' . base64_encode('admin' . ':' . $pass);
+    $ccms_url = $ccms_auth_config->get('ccms_url');
+    if (!empty($ccms_url)) {
+      try {
+        $client = \Drupal::httpClient();
+        $request = $client->post($ccms_url . '/api/post/category', [
+          'headers' => [
+            'Authorization' => $auth,
+            'Content-type' => 'application/json',
+          ],
+          'json' => $term_data,
+        ]);
+      }
+      catch (RequestException $e) {
+        watchdog_exception('ccms_express', $e);
+      }
+      catch (ConnectException $e) {
+        watchdog_exception('ccms_express', $e);
+      }
+    }
+  }
+}
+
+/**
+ * The function sends a request to the Express App on updation of a category
+ * from a node edit form only.
+ */
+function ccms_express_taxonomy_term_update(EntityInterface $entity) {
+  if ($entity->getVocabularyId() == 'category') {
+    $previousUrl = \Drupal::request()->server->get('HTTP_REFERER');
+    $fake_request = Request::create($previousUrl);
+    $url_object = \Drupal::service('path.validator')->getUrlIfValid($fake_request->getRequestUri());
+    $config_factory = \Drupal::configFactory();
+    $ccms_auth_config = $config_factory->getEditable('ccms_express.auth');
+    if ($url_object) {
+      $route_name = $url_object->getRouteName();
+      if ($route_name == 'entity.taxonomy_term.edit_form') {
+        $sessionToken = new GetSessionToken();
+        $token = $sessionToken->gettoken();
+
+        $term_data = getCategory($entity->id());
+        try {
+          $client = \Drupal::httpClient();
+          $request = $client->put($ccms_auth_config->get('url') . '/category', [
+            'headers' => ['x-access-token' => $token],
+            'json' => $term_data,
+          ]);
+        }
+        catch (RequestException $e) {
+          watchdog_exception('ccms_express', $e);
+        }
+        catch (ConnectException $e) {
+          watchdog_exception('ccms_express', $e);
+        }
+      }
+    }
+  }
+}
+
+/**
+ *
+ */
+function ccms_express_taxonomy_term_delete(EntityInterface $entity) {
+  if ($entity->getVocabularyId() == 'category') {
+    $term_data = getCategory($entity->id());
+    $config_factory = \Drupal::configFactory();
+    $ccms_auth_config = $config_factory->getEditable('ccms_express.auth');
+    $sessionToken = new GetSessionToken();
+    $token = $sessionToken->gettoken();
+    try {
+      $client = \Drupal::httpClient();
+      $request = $client->delete($ccms_auth_config->get('url') . '/category', [
+        'headers' => ['x-access-token' => $token],
+        'json' => [$entity->id()],
+      ]);
+    }
+    catch (RequestException $e) {
+      watchdog_exception('ccms_express', $e);
+    }
+    catch (ConnectException $e) {
+      watchdog_exception('ccms_express', $e);
+    }
+  }
+}
+
+/**
+ * Returns the object of Term with its parent and depth.
+ */
+function getCategory($tid) {
+  $vocabulary_tree = \Drupal::entityTypeManager()
+    ->getStorage('taxonomy_term')
+    ->loadTree('category');
+  $term = [];
+
+  foreach ($vocabulary_tree as $term_item) {
+    $current_time = strtotime('-15 min');
+    if ($term_item->tid == $tid) {
+      if ($current_time < $term_item->changed) {
+        $updated = TRUE;
+      }
+      else {
+        $updated = FALSE;
+      }
+      $term['depth'] = $term_item->depth;
+      $term['tid'] = $term_item->tid;
+      $term['vid'] = $term_item->vid;
+      $term['name'] = $term_item->name;
+      $term['description_value'] = $term_item->description__value;
+      $term['description_format'] = $term_item->description__format;
+      $term['changed'] = $term_item->changed;
+      $term['parent'] = $term_item->parents;
+      $term['updated'] = $updated;
+    }
+  }
+  return $term;
+}
+
+/**
+ * Returns the Complete Taxonomy Tree with its parent and depth.
+ */
+function getCategoryTree() {
+  $vocabulary_tree = \Drupal::entityTypeManager()
+    ->getStorage('taxonomy_term')
+    ->loadTree('category');
+  $term = [];
+
+  foreach ($vocabulary_tree as $term_item) {
+    $current_time = strtotime('-15 min');
+    if ($current_time < $term_item->changed) {
+      $updated = TRUE;
+    }
+    else {
+      $updated = FALSE;
+    }
+    $term[$term_item->tid]['depth'] = $term_item->depth;
+    $term[$term_item->tid]['tid'] = $term_item->tid;
+    $term[$term_item->tid]['vid'] = $term_item->vid;
+    $term[$term_item->tid]['name'] = $term_item->name;
+    $term[$term_item->tid]['description_value'] = $term_item->description__value;
+    $term[$term_item->tid]['description_format'] = $term_item->description__format;
+    $term[$term_item->tid]['changed'] = $term_item->changed;
+    $term[$term_item->tid]['parent'] = $term_item->parents;
+    $term[$term_item->tid]['updated'] = $updated;
+  }
+  return $term;
+}
+
+/**
+ * Validation handler for bulk delete of nodes.
+ */
+function _bulk_delete_validation(&$form, FormStateInterface $form_state) {
+  $items = $form['entities']['#items'];
+  foreach ($items as $nid => $title) {
+
+    $id = substr($nid, 0, -3);
+    $node = Node::load($id);
+    $type = $node->get('type')->getValue()[0]['target_id'];
+    $sessionToken = new GetSessionToken();
+    $token = $sessionToken->gettoken();
+    $config_factory = \Drupal::configFactory();
+    $ccms_auth_config = $config_factory->getEditable('ccms_express.auth');
+    $express_published = $node->get('field_received_express')->getValue()[0]['value'];
+
+    if (in_array($type, ['article', 'blog', 'magazine', 'events', 'slideshow'])) {
+      $express_published = $node->get('field_received_express')->getValue()[0]['value'];
+      if ($express_published == 1) {
+        try {
+          $client = \Drupal::httpClient();
+          $request = $client->delete($ccms_auth_config->get('url') . '/ccms/' . $type . '/' . $id, [
+            'headers' => ['x-access-token' => $token],
+            'json' => ['title' => $title],
+          ]);
+        }
+        catch (RequestException $e) {
+          $form_state->setError($form, $response->message . 'Express APP did not delete this. It cannot be deleted yet.');
+          return FALSE;
+        }
+      }
+    }
+  }
+}
+
+/**
+ *
+ */
+function ccms_express_sites_options(FieldStorageConfig $definition, ContentEntityInterface $entity = NULL, $cacheable) {
+  $sessionToken = new GetSessionToken();
+  $token = $sessionToken->gettoken();
+  $config_factory = \Drupal::configFactory();
+  $ccms_auth_config = $config_factory->getEditable('ccms_express.auth');
+
+  $options = [];
+  try {
+    $client = \Drupal::httpClient();
+    $request = $client->get($ccms_auth_config->get('url') . '/site/sitename', [
+      'headers' => ['x-access-token' => $token],
+    ]);
+    $response = json_decode($request->getBody());
+    $options = (array) $response;
+  }
+  catch (RequestException $e) {
+    watchdog_exception('ccms_express', $e);
+    return FALSE;
+  }
+
+  return $options;
+}

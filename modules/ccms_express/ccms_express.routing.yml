@@ -1,0 +1,44 @@
+ccms_express.nids:
+  path: '/ccms_express/{nid}'
+  defaults:
+    _controller: '\Drupal\ccms_express\Controller\GetArticleNode::getarticle'
+    _title: 'Checking code'
+  requirements:
+    _permission: 'access content'
+ccms_express.populate:
+  path: '/ccms_express/category_populate/{vocabulary}'
+  defaults:
+    _controller: '\Drupal\ccms_express\Controller\PopulateCategories::populate'
+    _title: 'Populate Terms'
+  requirements:
+    _permission: 'access content'
+ccms_express.settings:
+  path: '/admin/config/system/ccms-express-auth'
+  defaults:
+    _form: 'Drupal\ccms_express\Form\CCMSAuthenticationForm'
+    _title: 'CCMS Express Authentication settings'
+  requirements:
+    _permission: 'administer actions'
+ccms_express.login_bridge:
+  path: '/user/login/ccms'
+  defaults:
+    _controller: '\Drupal\ccms_express\Controller\ExpressLogin::authenticate'
+    _title: 'CCMS Express Login Bridge'
+  requirements:
+    _permission: 'administer actions'
+  options:
+        no_cache: TRUE
+ccms_express.update:
+  path: '/admin/content/update-form'
+  defaults:
+    _form: '\Drupal\ccms_express\Form\NodeBulkUpdateForm'
+    _title: 'CCMS Bulk Update Form'
+  requirements:
+    _permission: 'administer actions'
+ccms_express.createuser:
+  path: '/admin/add/express-user'
+  defaults:
+    _form: '\Drupal\ccms_express\Form\CreateExpressUser'
+    _title: 'Express User Create Form'
+  requirements:
+    _permission: 'administer actions'
